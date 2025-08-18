@@ -1,8 +1,21 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import styled from 'styled-components';
 import { FaGithub, FaLinkedin, FaTwitter, FaUser, FaEnvelope } from 'react-icons/fa';
 
 const Form = () => {
+  const [username, setUsername] = useState('');
+  const [chatId, setChatId] = useState('');
+  const navigate = useNavigate();
+  
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (username.trim() && chatId.trim()) {
+      navigate(`/${chatId.trim()}/${username.trim()}`);
+    }
+  };
+
   return (
     <PageContainer>
       <Header>
@@ -13,10 +26,26 @@ const Form = () => {
       </Header>
 
       <FormContainer>
-        <StyledForm>
+        <StyledForm onSubmit={handleSubmit}>
           <div className="title">Welcome,<br /><span>Create or join a Room</span></div>
-          <input type="text" placeholder="Username" name="username" className="input" />
-          <input type="text" placeholder="ChatId" name="chatid" className="input" />
+          <input 
+            type="text" 
+            placeholder="Username" 
+            name="username" 
+            className="input" 
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            required
+          />
+          <input 
+            type="text" 
+            placeholder="Chat ID" 
+            name="chatid" 
+            className="input" 
+            value={chatId}
+            onChange={(e) => setChatId(e.target.value)}
+            required
+          />
           <button type="submit" className="button-confirm">Let's go →</button>
         </StyledForm>
       </FormContainer>

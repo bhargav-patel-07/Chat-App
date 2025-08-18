@@ -1,12 +1,14 @@
-import React, { useEffect } from "react";
-import { io } from "socket.io-client";
-import LandingPage from "./pages/landingpage";
+import React, { useState, useEffect } from 'react';
+import { BrowserRouter as Router, Routes, Route, useParams } from 'react-router-dom';
+import io from 'socket.io-client';
+import LandingPage from './pages/landingpage';
+import ChatPage from './pages/chatpage';
 
 const App = () => {
   const [messages, setMessages] = React.useState([]);
 
   useEffect(() => {
-    const socket = io("http://localhost:3000");
+    const socket = io("http://localhost:5000");
     
     // Client-side connection event
     socket.on("connect", () => {
@@ -34,10 +36,13 @@ const App = () => {
   }, []);
 
   return (
-         <div>
-            <LandingPage/>
-         </div>
- );
+    <Router>
+      <Routes>
+        <Route path="/" element={<LandingPage />} />
+        <Route path="/:chatId/:username" element={<ChatPage />} />
+      </Routes>
+    </Router>
+  );
 };
 
 export default App;
