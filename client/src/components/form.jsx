@@ -9,10 +9,40 @@ const Form = () => {
   const navigate = useNavigate();
   
 
-  const handleSubmit = (e) => {
+  const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    if (username.trim() && chatId.trim()) {
-      navigate(`/${chatId.trim()}/${username.trim()}`);
+    const trimmedUsername = username.trim();
+    const trimmedChatId = chatId.trim();
+    
+    if (!trimmedUsername || !trimmedChatId) {
+      setError('Both username and chat ID are required');
+      return;
+    }
+    
+    // Basic validation
+    if (trimmedUsername.length < 3) {
+      setError('Username must be at least 3 characters long');
+      return;
+    }
+    
+    if (trimmedChatId.length < 3) {
+      setError('Chat ID must be at least 3 characters long');
+      return;
+    }
+    
+    setError('');
+    setIsSubmitting(true);
+    
+    try {
+      // The actual validation will happen when the ChatInterface tries to join the room
+      navigate(`/${encodeURIComponent(trimmedChatId)}/${encodeURIComponent(trimmedUsername)}`);
+    } catch (err) {
+      console.error('Error joining chat:', err);
+      setError('Failed to join chat. Please try again.');
+      setIsSubmitting(false);
     }
   };
 

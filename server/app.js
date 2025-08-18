@@ -31,20 +31,102 @@ const io = new Server(server, {
   }
 });
 
+// Track users in each room
+const roomUsers = new Map();
+
 // Socket.IO connection handler
 io.on('connection', (socket) => {
   console.log('New client connected:', socket.id);
+  let currentRoom = null;
+  let currentUsername = null;
 
   // Handle joining a room
-  socket.on('joinRoom', ({ roomId, username }) => {
-    console.log(`${socket.id} joining room:`, roomId);
+  socket.on('joinRoom', ({ roomId, username }, callback) => {
+    console.log(`${socket.id} attempting to join room:`, roomId, 'as', username);
+    
+    // Initialize room if it doesn't exist
+    if (!roomUsers.has(roomId)) {
+      roomUsers.set(roomId, new Set());
+    }
+    
+    const usersInRoom = roomUsers.get(roomId);
+    const usernameLower = username.toLowerCase();
+    
+    // Only check for duplicates if there are users in the room
+    if (usersInRoom.size > 0) {
+      // Check for duplicate username (case-insensitive)
+      const isDuplicate = Array.from(usersInRoom).some(
+        u => u.toLowerCase() === usernameLower && u !== currentUsername
+      );
+      
+      if (isDuplicate) {
+        console.log(`Username ${username} is already taken in room ${roomId}`);
+        if (typeof callback === 'function') {
+          callback({
+            status: 'error',
+            error: 'Username is already taken in this room. Please choose another.'
+          });
+        }
+        return;
+      }
+    }
+
+    // Leave previous room if any
+    if (currentRoom) {
+      socket.leave(currentRoom);
+      const previousUsers = roomUsers.get(currentRoom);
+      if (previousUsers) {
+        previousUsers.delete(currentUsername);
+        if (previousUsers.size === 0) {
+          roomUsers.delete(currentRoom);
+        }
+      }
+    }
+
+    // Join new room
     socket.join(roomId);
+    currentRoom = roomId;
+    currentUsername = username;
+    
+    // Add user to room
+    if (!roomUsers.has(roomId)) {
+      roomUsers.set(roomId, new Set());
+    }
+    roomUsers.get(roomId).add(username);
+    
+    console.log(`${username} joined room: ${roomId}`);
+    
+    // Notify room
     io.to(roomId).emit('message', {
       user: 'system',
       text: `${username} has joined the room.`,
       timestamp: new Date().toISOString()
     });
     
+    if (typeof callback === 'function') {
+      callback({ status: 'ok' });
+    }
+  });
+  
+  // Handle disconnection
+  socket.on('disconnect', () => {
+    console.log('Client disconnected:', socket.id, 'from room:', currentRoom);
+    if (currentRoom && currentUsername) {
+      const usersInRoom = roomUsers.get(currentRoom);
+      if (usersInRoom) {
+        usersInRoom.delete(currentUsername);
+        if (usersInRoom.size === 0) {
+          roomUsers.delete(currentRoom);
+        }
+      }
+      
+      // Notify room that user left
+      io.to(currentRoom).emit('message', {
+        user: 'system',
+        text: `${currentUsername} has left the room.`,
+        timestamp: new Date().toISOString()
+      });
+    }
   });
 
   // Handle sending messages

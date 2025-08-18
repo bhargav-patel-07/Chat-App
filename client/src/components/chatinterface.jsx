@@ -19,28 +19,62 @@ const ChatInterface = ({ username, chatId }) => {
   const [messages, setMessages] = useState([]);
   const [connectionStatus, setConnectionStatus] = useState('disconnected');
 
+  const [joinError, setJoinError] = useState('');
+  const [joined, setJoined] = useState(false);
+
   useEffect(() => {
     console.log('Setting up socket listeners...');
     
-    // Clear messages when chatId changes
-    setMessages(prev => {
-      if (prev.length > 0) {
-        console.log('Clearing previous messages due to chat change');
-        return [];
+    // Clear messages and state when chatId or username changes
+    setMessages([]);
+    setJoinError('');
+    setJoined(false);
+    
+    if (!username || !chatId) {
+      setJoinError('Missing username or chat ID');
+      return;
+    }
+    
+    console.log(`Joining room: ${chatId} as ${username}`);
+    
+    // Try to join the room
+    console.log('Attempting to join room:', { chatId, username });
+    socket.emit('joinRoom', { 
+      roomId: chatId, 
+      username 
+    }, (response) => {
+      console.log('Join room response:', response);
+      
+      if (response && response.status === 'ok') {
+        console.log('Successfully joined room:', chatId);
+        setJoined(true);
+        setJoinError('');
+      } else {
+        const errorMsg = response?.error || 'Failed to join room. Please try again.';
+        console.error('Failed to join room:', errorMsg, 'Response:', response);
+        setJoinError(errorMsg);
+        setJoined(false);
+        
+        // If it's a duplicate username error, redirect back to home after a delay
+        if (errorMsg.includes('already taken')) {
+          setTimeout(() => {
+            window.location.href = '/';
+          }, 3000);
+        }
       }
-      return prev;
     });
     
-    if (username && chatId) {
-      console.log(`Joining room: ${chatId} as ${username}`);
-      socket.emit('joinRoom', { roomId: chatId, username }, (response) => {
-        if (response && response.status === 'ok') {
-          console.log('Successfully joined room:', chatId);
-        } else {
-          console.error('Failed to join room:', response?.error || 'Unknown error');
-        }
-      });
-    }
+    // Set a timeout in case the server doesn't respond
+    const timeout = setTimeout(() => {
+      if (!joined && !joinError) {
+        console.error('Join room request timed out');
+        setJoinError('Connection timeout. Please try again.');
+        setJoined(false);
+      }
+    }, 10000); // 10 second timeout
+    
+    // Cleanup function
+    return () => clearTimeout(timeout);
 
     const handleMessage = (msg) => {
       console.log('Received message:', msg);
@@ -188,6 +222,28 @@ const ChatInterface = ({ username, chatId }) => {
       sendMessage();
     }
   };
+
+  // Show error message if failed to join
+  if (joinError) {
+    return (
+      <ErrorContainer>
+        <ErrorMessageBox>
+          <h3>Could Not Join Chat</h3>
+          <p>{joinError}</p>
+          <BackButton onClick={() => window.location.href = '/'}>Go Back</BackButton>
+        </ErrorMessageBox>
+      </ErrorContainer>
+    );
+  }
+
+  // Show loading state while connecting
+  if (!joined) {
+    return (
+      <LoadingContainer>
+        <p>Connecting to chat...</p>
+      </LoadingContainer>
+    );
+  }
 
   return (
     <ChatContainer>
@@ -359,6 +415,59 @@ const NoMessages = styled.div`
   height: 100%;
   color: #666;
   font-style: italic;
+`;
+
+const ErrorContainer = styled.div`
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  padding: 1rem;
+  background-color: #f8f9fa;
+`;
+
+const ErrorMessageBox = styled.div`
+  background: white;
+  padding: 2rem;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  text-align: center;
+  max-width: 400px;
+  width: 100%;
+
+  h3 {
+    color: #dc3545;
+    margin-top: 0;
+  }
+
+  p {
+    margin: 1rem 0;
+    color: #6c757d;
+  }
+`;
+
+const BackButton = styled.button`
+  background-color: #007bff;
+  color: white;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 1rem;
+  transition: background-color 0.2s;
+
+  &:hover {
+    background-color: #0056b3;
+  }
+`;
+
+const LoadingContainer = styled.div`
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  font-size: 1.2rem;
+  color: #6c757d;
 `;
 
 const ConnectionStatus = styled.div`

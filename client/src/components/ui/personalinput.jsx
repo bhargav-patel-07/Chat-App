@@ -5,14 +5,7 @@ const Input = () => {
   return (
     <StyledWrapper>
       <div className="group">
-      <input 
-        type="text"
-        className="input"
-        value={value}
-        onChange={onChange}
-        onKeyPress={onKeyPress}
-        placeholder={placeholder}
-      />
+        <input required type="text" className="input" placeholder=" " />
         <span className="highlight" />
         <span className="bar" />
         <label>Username [For Personal texting]</label>
