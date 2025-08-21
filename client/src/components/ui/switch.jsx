@@ -1,11 +1,16 @@
 import React from 'react';
 import styled from 'styled-components';
 
-const Switch = () => {
+const Switch = ({ checked, onChange }) => {
   return (
     <StyledWrapper>
       <label className="switch">
-        <input defaultChecked type="checkbox" className="toggle" />
+        <input
+          type="checkbox"
+          className="toggle"
+          checked={checked}
+          onChange={e => onChange(e.target.checked)}
+        />
         <span className="slider" />
         <span className="card-side" />
       </label>

@@ -8,13 +8,21 @@
     "start": "node app.js",
     "dev": "nodemon --watch . --ext js --exec node app.js"
   },
-  "keywords": ["chat", "socket.io", "express", "realtime"],
+  "keywords": [
+    "chat",
+    "socket.io",
+    "express",
+    "realtime"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@google/genai": "^1.15.0",
     "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
     "express": "^4.18.2",
-    "socket.io": "^4.7.2"
+    "socket.io": "^4.7.2",
+    "together-ai": "^0.22.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.0"

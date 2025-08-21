@@ -9,18 +9,83 @@ import PersonalInput from './ui/personalinput';
 const socket = io('http://localhost:5000', {
   withCredentials: true,
   transports: ['websocket', 'polling'],
-  autoConnect: true,
+  autoConnect: false, // We'll connect manually after component mounts
   reconnection: true,
   reconnectionAttempts: 5,
   reconnectionDelay: 1000,
+  path: '/socket.io/',
+  timeout: 10000
 });
 const ChatInterface = ({ username, chatId }) => {
+  // Socket.IO connection management
+  useEffect(() => {
+    // Connect to socket when component mounts
+    socket.connect();
+    
+    // Set up event listeners
+    const onConnect = () => {
+      console.log('Connected to server');
+      setConnectionStatus('connected');
+    };
+    
+    const onDisconnect = () => {
+      console.log('Disconnected from server');
+      setConnectionStatus('disconnected');
+    };
+    
+    const onError = (error) => {
+      console.error('Socket error:', error);
+      setConnectionStatus('error');
+    };
+    
+    socket.on('connect', onConnect);
+    socket.on('disconnect', onDisconnect);
+    socket.on('connect_error', onError);
+    
+    // Clean up on unmount
+    return () => {
+      socket.off('connect', onConnect);
+      socket.off('disconnect', onDisconnect);
+      socket.off('connect_error', onError);
+      socket.disconnect();
+    };
+  }, []);
+  
+  // State hooks
+
+  const handleImageSend = async (file) => {
+    if (!file || !username || !chatId) return;
+    const tempId = `temp-img-${Date.now()}`;
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const imageData = e.target.result; // base64 string
+      const messageData = {
+        roomId: chatId,
+        user: username,
+        image: imageData,
+        tempId,
+        timestamp: new Date().toISOString()
+      };
+      setMessages(prev => [...prev, { ...messageData, isSending: true }]);
+      socket.emit("sendMessage", messageData, (response) => {
+        if (!(response && response.status === 'ok')) {
+          setMessages(prev => prev.map(msg =>
+            msg.tempId === tempId
+              ? { ...msg, isSending: false, isError: true, error: response?.error || 'Failed to send image' }
+              : msg
+          ));
+        }
+      });
+    };
+    reader.readAsDataURL(file);
+  };
+
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState([]);
   const [connectionStatus, setConnectionStatus] = useState('disconnected');
-
   const [joinError, setJoinError] = useState('');
   const [joined, setJoined] = useState(false);
+  const [aiMode, setAiMode] = useState(false); // AI switch state
 
   useEffect(() => {
     console.log('Setting up socket listeners...');
@@ -55,29 +120,15 @@ const ChatInterface = ({ username, chatId }) => {
         setJoinError(errorMsg);
         setJoined(false);
         
-        // If it's a duplicate username error, redirect back to home after a delay
-        if (errorMsg.includes('already taken')) {
-          setTimeout(() => {
-            window.location.href = '/';
-          }, 3000);
-        }
       }
     });
     
-    // Set a timeout in case the server doesn't respond
-    const timeout = setTimeout(() => {
-      if (!joined && !joinError) {
-        console.error('Join room request timed out');
-        setJoinError('Connection timeout. Please try again.');
-        setJoined(false);
-      }
-    }, 10000); // 10 second timeout
-    
+    // No timeout for join room request. Removed setTimeout logic.
     // Cleanup function
-    return () => clearTimeout(timeout);
+    // (No timeout to clear)
 
     const handleMessage = (msg) => {
-      console.log('Received message:', msg);
+      console.log('Received message from server:', msg);
       if (!msg || !msg.user || !msg.text) {
         console.error('Invalid message format:', msg);
         return;
@@ -85,13 +136,17 @@ const ChatInterface = ({ username, chatId }) => {
       
       setMessages(prev => {
         // Check if this is an update to an existing message (matches by tempId or content)
-        const existingMessageIndex = prev.findIndex(m => 
-          (m.tempId && msg.tempId && m.tempId === msg.tempId) ||
-          (m.user === msg.user && m.text === msg.text && 
-           (!m.timestamp || !msg.timestamp || 
-            Math.abs(new Date(m.timestamp).getTime() - new Date(msg.timestamp).getTime()) < 5000))
-        );
-        
+        const existingMessageIndex = prev.findIndex(m => {
+          const match = (m.tempId && msg.tempId && m.tempId === msg.tempId) ||
+            (m.user === msg.user && m.text === msg.text &&
+              (!m.timestamp || !msg.timestamp ||
+                Math.abs(new Date(m.timestamp).getTime() - new Date(msg.timestamp).getTime()) < 5000));
+          if (match) {
+            console.log('Matching optimistic message found:', m, 'with server message:', msg);
+          }
+          return match;
+        });
+
         if (existingMessageIndex >= 0) {
           // Update existing message (this will clear the sending state)
           const updated = [...prev];
@@ -159,7 +214,7 @@ const ChatInterface = ({ username, chatId }) => {
     };
   }, [username, chatId]);
 
-  const sendMessage = () => {
+  const sendMessage = async () => {
     const trimmedMessage = message.trim();
     if (!trimmedMessage || !username || !chatId) {
       console.error('Cannot send message: missing required fields', { 
@@ -214,7 +269,32 @@ const ChatInterface = ({ username, chatId }) => {
         ));
       }
     });
+
+    // If AI mode is enabled, send message to AI API and broadcast response
+    if (aiMode) {
+      try {
+        const aiRes = await fetch('http://localhost:5000/api/ai/text', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt: trimmedMessage })
+        });
+        const aiData = await aiRes.json();
+        if (aiData && aiData.text) {
+          // Broadcast AI response to group as 'AI'
+          const aiMessage = {
+            roomId: chatId,
+            user: 'AI',
+            text: aiData.text,
+            timestamp: new Date().toISOString()
+          };
+          socket.emit("sendMessage", aiMessage);
+        }
+      } catch (err) {
+        console.error('AI API error:', err);
+      }
+    }
   };
+
 
   const handleKeyPress = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -247,7 +327,7 @@ const ChatInterface = ({ username, chatId }) => {
 
   return (
     <ChatContainer>
-      <ConnectionStatus status={connectionStatus}>
+      <ConnectionStatus $status={connectionStatus}>
         {connectionStatus === 'connected' ? 'Connected' : 'Disconnected'}
       </ConnectionStatus>
       <MessagesContainer id="messages-container">
@@ -261,10 +341,10 @@ const ChatInterface = ({ username, chatId }) => {
             return (
               <Message 
                 key={msg.tempId || `${msg.timestamp || Date.now()}-${i}`}
-                isUser={isCurrentUser}
-                isSystem={isSystem}
-                isSending={msg.isSending}
-                isError={msg.isError}
+                $isUser={isCurrentUser}
+                $isSystem={isSystem}
+                $isSending={msg.isSending}
+                $isError={msg.isError}
                 data-testid={
                   isSystem ? 'system-message' : 
                   isCurrentUser ? 'user-message' : 'other-message'
@@ -272,6 +352,11 @@ const ChatInterface = ({ username, chatId }) => {
               >
                 {!isSystem && <strong>{msg.user}: </strong>}
                 <MessageText>{msg.text}</MessageText>
+                {msg.image && (
+                  <div style={{ marginTop: 8 }}>
+                    <img src={msg.image} alt="sent" style={{ maxWidth: '220px', maxHeight: '180px', borderRadius: '8px', border: '1px solid #ccc' }} />
+                  </div>
+                )}
                 
                 {msg.isError && (
                   <ErrorMessage>Failed to send. {msg.error || 'Please try again.'}</ErrorMessage>
@@ -299,7 +384,7 @@ const ChatInterface = ({ username, chatId }) => {
       <InputContainer>
         <TopRow>
           <SwitchContainer>
-            <Switch />
+            <Switch checked={aiMode} onChange={setAiMode} />
           </SwitchContainer>
           <PersonalInputContainer>
             <PersonalInput />
@@ -312,6 +397,7 @@ const ChatInterface = ({ username, chatId }) => {
               onChange={(e) => setMessage(e.target.value)}
               onKeyPress={handleKeyPress}
               placeholder="Type a message..."
+              onImageChange={handleImageSend}
             />
           </InputWrapper>
           <ButtonContainer onClick={sendMessage}>
@@ -327,10 +413,12 @@ const ChatInterface = ({ username, chatId }) => {
 
 const ChatContainer = styled.div`
   display: flex;
+  background-color:#e8e8e8;
   flex-direction: column;
   height: 100vh;
   max-height: 100vh;
-  border: 4px solid #eee;
+  border: 2px solid;
+  border-color : black;
   overflow: hidden;
   padding: 0;
   margin: 0 auto;
@@ -353,30 +441,30 @@ const MessagesContainer = styled.div`
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  background-color: #f8f8f8;
+  background-color:;
   gap: 10px;
 `;
 
 const Message = styled.div`
-  background: ${({ isUser, isSystem, isError }) => 
-    isSystem ? '#e3f2fd' : 
-    isError ? '#ffebee' :
-    isUser ? '#f5f5dc' : '#f1f1f1' 
+  background: ${({ $isUser, $isSystem, $isError }) => 
+    $isSystem ? '#e3f2fd' : 
+    $isError ? '#ffebee' :
+    $isUser ? '#f5f5dc' : '#f1f1f1' 
   };
-  color: ${({ isUser, isSystem, isError }) => 
-    isError ? '#d32f2f' :
-    isSystem ? '#1565c0' :
-    isUser ? 'Black' : 'Black' 
+  color: ${({ $isUser, $isSystem, $isError }) => 
+    $isError ? '#d32f2f' :
+    $isSystem ? '#1565c0' :
+    $isUser ? 'Black' : 'Black' 
   };
-  border: ${({ isError }) => isError ? '1px solid #ffcdd2' : 'none'};
+  border: ${({ $isError }) => $isError ? '1px solid #ffcdd2' : 'none'};
   border-radius: 15px;
   padding: 10px 15px;
   margin: 5px 0;
   max-width: 70%;
-  align-self: ${({ isUser, isSystem }) => (isUser || isSystem) ? 'flex-end' : 'flex-start'};
+  align-self: ${({ $isUser, $isSystem }) => ($isUser || $isSystem) ? 'flex-end' : 'flex-start'};
   position: relative;
   word-break: break-word;
-  opacity: ${({ isSending }) => isSending ? 0.7 : 1};
+  opacity: ${({ $isSending }) => $isSending ? 0.7 : 1};
   transition: opacity 0.3s ease;
 `;
 
@@ -476,7 +564,7 @@ const ConnectionStatus = styled.div`
   right: 10px;
   padding: 5px 10px;
   border-radius: 15px;
-  background-color: ${props => props.status === 'connected' ? '#4caf50' : '#f44336'};
+  background-color: ${props => props.$status === 'connected' ? '#4caf50' : '#f44336'};
   color: white;
   font-size: 0.8rem;
   z-index: 1000;
