@@ -16,7 +16,10 @@ const PORT = process.env.PORT || 5000;
 // Middleware - Must come before Socket.IO initialization
 app.use(express.json());
 app.use(cors({
-  origin: 'http://localhost:5173',
+  origin: [
+    'http://localhost:5173',
+    'https://troom.vercel.app'
+  ],
   methods: ['GET', 'POST', 'OPTIONS'],
   credentials: true,
   allowedHeaders: ['Content-Type', 'Authorization']
@@ -28,8 +31,11 @@ const server = createServer(app);
 // Initialize Socket.IO with CORS
 const io = new Server(server, {
   cors: {
-    origin: 'http://localhost:5173',
-    methods: ['GET', 'POST', 'OPTIONS'],
+    origin: [
+      "http://localhost:5173",
+      "https://troom.vercel.app"
+    ],
+    methods: ["GET", "POST", "OPTIONS"],
     credentials: true,
     allowedHeaders: ['Content-Type', 'Authorization']
   },

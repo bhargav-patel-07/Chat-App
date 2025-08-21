@@ -1,29 +1,52 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import styled from 'styled-components';
 
-const Card = () => {
+const Card = ({ title = 'Code', language = 'javascript', code = '', showLineNumbers = true }) => {
+  const [copied, setCopied] = useState(false);
+  const codeRef = useRef(null);
+  const lines = code.split('\n');
+
+  const handleCopy = () => {
+    if (codeRef.current) {
+      const textToCopy = codeRef.current.textContent;
+      navigator.clipboard.writeText(textToCopy).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      });
+    }
+  };
   return (
     <StyledWrapper>
       <div className="card-container">
         <div className="card">
           <div className="card-header">
             <div className="card-tabs">
-              <div className="card-tab active">Create an HTTP Server</div>
+              <div className="card-tab active" title={title}>
+              {title.length > 10 ? `${title.substring(0, 10)}...` : title}
+            </div>
             </div>
           </div>
           <div className="card-body">
-            <div className="line-numbers">
-              <span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span><span>11</span><span>12</span><span>13</span><span>14</span>
-            </div>
-            <pre className="code-content"><code><span className="code-comment">// server.mjs</span>{"\n"}<span className="code-keyword">import</span> {"{"} <span className="code-variable">createServer</span> {"}"} <span className="code-keyword">from</span> <span className="code-string">'node:http'</span>;{"\n"}{"\n"}<span className="code-keyword">const</span> <span className="code-variable-2">server</span> = <span className="code-function">createServer</span>((<span className="code-variable-2">req</span>, <span className="code-variable-2">res</span>) =&gt; {"{"}{"\n"}{"  "}<span className="code-variable-2">res</span>.<span className="code-function">writeHead</span>(<span className="code-number">200</span>, {"{"} <span className="code-string">'Content-Type'</span>: <span className="code-string">'text/plain'</span> {"}"});{"\n"}{"  "}<span className="code-variable-2">res</span>.<span className="code-function">end</span>(<span className="code-string">'Hello World!\n'</span>);{"\n"}{"}"});{"\n"}{"\n"}<span className="code-comment">// starts a simple http server locally on port 3000</span>{"\n"}<span className="code-variable-2">server</span>.<span className="code-function">listen</span>(<span className="code-number">3000</span>, <span className="code-string">'127.0.0.1'</span>, () =&gt; {"{"}{"\n"}{"  "}<span className="code-function">console</span>.<span className="code-function">log</span>(<span className="code-string">'Listening on 127.0.0.1:3000'</span>);{"\n"}{"}"});{"\n"}{"\n"}<span className="code-comment">// run with `node server.mjs`</span>{"\n"}</code></pre>
+            {showLineNumbers && (
+              <div className="line-numbers">
+                {lines.map((_, i) => (
+                  <span key={i}>{i + 1}</span>
+                ))}
+              </div>
+            )}
+            <pre className="code-content">
+              <code ref={codeRef}>
+                {code}
+              </code>
+            </pre>
           </div>
           <div className="card-footer">
-            <span className="language-name">JavaScript</span>
-            <button className="copy-button">
+            <span className="language-name">{language}</span>
+            <button className="copy-button" onClick={handleCopy}>
               <svg stroke="currentColor" fill="currentColor" strokeWidth={0} viewBox="0 0 16 16" height="1em" width="1em" xmlns="http://www.w3.org/2000/svg">
                 <path fillRule="evenodd" d="M4 2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V2zm2-1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H6zM2 5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-1h1v1a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h1v1H2z" />
               </svg>
-              <span className="copy-button-text">Copy to clipboard</span>
+              <span className="copy-button-text">{copied ? 'Copied!' : 'Copy to clipboard'}</span>
             </button>
           </div>
         </div>

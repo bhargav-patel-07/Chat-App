@@ -1,15 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import styled from 'styled-components';
 import { io } from 'socket.io-client';
+import config from '../config';  
+import ReactMarkdown from 'react-markdown';
+import { Prism as SyntaxHighlighter } from 'prism-react-renderer';
 import Switch from './ui/switch';
 import Input from './ui/input';
 import Button from './ui/button';
 import PersonalInput from './ui/personalinput';
+import Card from './ui/card';
+import Avatar from './ui/Avatar';  
 
-const socket = io('http://localhost:5000', {
+const socket = io(config.wsUrl, {
   withCredentials: true,
   transports: ['websocket', 'polling'],
-  autoConnect: false, // We'll connect manually after component mounts
+  autoConnect: false, 
   reconnection: true,
   reconnectionAttempts: 5,
   reconnectionDelay: 1000,
@@ -50,6 +55,65 @@ const ChatInterface = ({ username, chatId }) => {
       socket.disconnect();
     };
   }, []);
+
+  const renderMessageContent = (text) => {
+    if (!text) return [{ type: 'text', content: '' }];
+    
+    const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
+    const parts = [];
+    let lastIndex = 0;
+    let match;
+
+    // First, handle code blocks
+    while ((match = codeBlockRegex.exec(text)) !== null) {
+      // Add markdown text before the code block
+      if (match.index > lastIndex) {
+        parts.push({ 
+          type: 'text', 
+          content: text.substring(lastIndex, match.index).trim()
+        });
+      }
+
+      // Add the code block
+      const language = match[1] || 'text';
+      const code = match[2].trim();
+      
+      // Extract the user's query from the beginning of the message
+      const messageStart = text.substring(0, match.index).trim();
+      const lastNewLine = messageStart.lastIndexOf('\n');
+      const userQuery = lastNewLine >= 0 ? 
+        messageStart.substring(lastNewLine).trim() : 
+        messageStart || 'Code Snippet';
+      
+      parts.push({ 
+        type: 'component',
+        component: (
+          <Card 
+            key={`code-${lastIndex}`}
+            title={userQuery}
+            language={language}
+            code={code}
+            showLineNumbers={code.split('\n').length > 1}
+          />
+        )
+      });
+
+      lastIndex = match.index + match[0].length;
+    }
+
+    // Add any remaining markdown text
+    if (lastIndex < text.length) {
+      const remainingText = text.substring(lastIndex).trim();
+      if (remainingText) {
+        parts.push({ 
+          type: 'text', 
+          content: remainingText 
+        });
+      }
+    }
+
+    return parts.length > 0 ? parts : [{ type: 'text', content: text }];
+  };
   
   // State hooks
 
@@ -350,9 +414,97 @@ const ChatInterface = ({ username, chatId }) => {
                   isCurrentUser ? 'user-message' : 'other-message'
                 }
               >
-                {!isSystem && <strong>{msg.user}: </strong>}
-                <MessageText>{msg.text}</MessageText>
-                {msg.image && (
+                {!isSystem && (
+                  <MessageHeader $isCurrentUser={isCurrentUser}>
+                    {!isCurrentUser && (
+                      <Avatar 
+                        name={msg.user} 
+                        color={isCurrentUser ? '#4a90e2' : '#6c757d'}
+                        isAI={msg.user.toLowerCase() === 'ai'}
+                      />
+                    )}
+                    <UserName $isCurrentUser={isCurrentUser}>
+                      {isCurrentUser ? 'You' : msg.user}
+                    </UserName>
+                  </MessageHeader>
+                )}
+                <MessageContent $isCurrentUser={isCurrentUser} $isSystem={isSystem}>
+                  <MessageText>
+                    {renderMessageContent(msg.text).map((part, i) => 
+                      part.type === 'component' ? (
+                        <div key={`part-${i}`} style={{ margin: '10px 0', width: '100%' }}>
+                          {part.component}
+                        </div>
+                      ) : (
+                        <div key={`part-${i}`} className="markdown-content">
+                          <ReactMarkdown
+                            components={{
+                              code({node, inline, className, children, ...props}) {
+                                const match = /language-(\w+)/.exec(className || '');
+                                return !inline ? (
+                                  <Card 
+                                    title="Code Snippet"
+                                    language={match ? match[1] : 'text'}
+                                    code={String(children).replace(/\n$/, '')}
+                                  />
+                                ) : (
+                                  <code className={className} {...props}>
+                                    {children}
+                                  </code>
+                                );
+                              },
+                              p: ({node, ...props}) => (
+                                <p style={{ 
+                                  margin: '0.5em 0',
+                                  lineHeight: '1.6',
+                                  textAlign: 'left'
+                                }} {...props} />
+                              ),
+                              ul: ({node, ...props}) => (
+                                <ul style={{ 
+                                  margin: '0.5em 0', 
+                                  paddingLeft: '1.5em',
+                                  textAlign: 'left'
+                                }} {...props} />
+                              ),
+                              ol: ({node, ...props}) => (
+                                <ol style={{ 
+                                  margin: '0.5em 0', 
+                                  paddingLeft: '1.5em',
+                                  textAlign: 'left'
+                                }} {...props} />
+                              ),
+                              h1: ({node, ...props}) => <h3 style={{ margin: '1em 0 0.5em 0' }} {...props} />,
+                              h2: ({node, ...props}) => <h4 style={{ margin: '0.9em 0 0.5em 0' }} {...props} />,
+                              h3: ({node, ...props}) => <h5 style={{ margin: '0.8em 0 0.5em 0' }} {...props} />,
+                              blockquote: ({node, ...props}) => (
+                                <blockquote 
+                                  style={{
+                                    borderLeft: '3px solid #ddd',
+                                    margin: '0.5em 0',
+                                    padding: '0.1em 1em',
+                                    color: '#666',
+                                    fontStyle: 'italic'
+                                  }}
+                                  {...props} 
+                                />
+                              ),
+                              a: ({node, ...props}) => (
+                                <a 
+                                  style={{ color: '#0066cc', textDecoration: 'none' }}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  {...props}
+                                />
+                              ),
+                            }}
+                          >
+                            {part.content}
+                          </ReactMarkdown>
+                        </div>
+                      )
+                    )}
+                  </MessageText>                {msg.image && (
                   <div style={{ marginTop: 8 }}>
                     <img src={msg.image} alt="sent" style={{ maxWidth: '220px', maxHeight: '180px', borderRadius: '8px', border: '1px solid #ccc' }} />
                   </div>
@@ -375,102 +527,98 @@ const ChatInterface = ({ username, chatId }) => {
                 {msg.isSending && (
                   <SendingIndicator>Sending...</SendingIndicator>
                 )}
-              </Message>
-            );
-          })
-        )}
-      </MessagesContainer>
+              </MessageContent>
+            </Message>
+          );
+        })
+      )}
+    </MessagesContainer>
       
-      <InputContainer>
-        <TopRow>
-          <SwitchContainer>
-            <Switch checked={aiMode} onChange={setAiMode} />
-          </SwitchContainer>
-          <PersonalInputContainer>
-            <PersonalInput />
-          </PersonalInputContainer>
-        </TopRow>
-        <BottomRow>
-          <InputWrapper>
-            <Input 
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              onKeyPress={handleKeyPress}
-              placeholder="Type a message..."
-              onImageChange={handleImageSend}
-            />
-          </InputWrapper>
-          <ButtonContainer onClick={sendMessage}>
-            <Button>Send</Button>
-          </ButtonContainer>
-        </BottomRow>
-      </InputContainer>
-    </ChatContainer>
+    <InputContainer>
+      <TopRow>
+        <SwitchContainer>
+          <Switch checked={aiMode} onChange={setAiMode} />
+        </SwitchContainer>
+        <PersonalInputContainer>
+          <PersonalInput />
+        </PersonalInputContainer>
+      </TopRow>
+      <BottomRow>
+        <InputWrapper>
+          <Input 
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            onKeyPress={handleKeyPress}
+            placeholder="Type a message..."
+            onImageChange={handleImageSend}
+          />
+        </InputWrapper>
+        <ButtonContainer onClick={sendMessage}>
+          <Button>Send</Button>
+        </ButtonContainer>
+      </BottomRow>
+    </InputContainer>
+  </ChatContainer>
   );
 };
 
-
-
-const ChatContainer = styled.div`
+const MessageHeader = styled.div`
   display: flex;
-  background-color:#e8e8e8;
+  align-items: center;
+  margin-bottom: 2px;
+  flex-direction: ${props => props.$isCurrentUser ? 'row-reverse' : 'row'};
+`;
+
+const UserName = styled.span`
+  margin: 0 6px;
+  font-weight: 600;
+  font-size: 0.9em;
+  color: ${props => props.$isCurrentUser ? '#4a90e2' : '#333'};
+`;
+
+const MessageContent = styled.div`
+  display: flex;
   flex-direction: column;
-  height: 100vh;
-  max-height: 100vh;
-  border: 2px solid;
-  border-color : black;
-  overflow: hidden;
+  align-items: ${props => props.$isCurrentUser ? 'flex-end' : 'flex-start'};
+  width: 100%;
+  margin-top: ${props => props.$isSystem ? '4px' : '0'};
+`;
+
+const MessageText = styled.div`
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  text-align: left;
+  line-height: 1.4;
+  margin: 0.25em 0;
   padding: 0;
-  margin: 0 auto;
-  max-width: 100%;
+  width: 100%;
   
-  @media (min-width: 1024px) {
-    max-width: 80%;
-    margin: 0 10%;
+  /* Ensure markdown content takes full width and wraps properly */
+  .markdown-content {
+    width: 100%;
+    text-align: left;
+    
+    /* Add some spacing between markdown elements */
+    > * {
+      margin: 0.3em 0;
+      &:first-child {
+        margin-top: 0;
+      }
+      &:last-child {
+        margin-bottom: 0;
+      }
+    }
+    
+    /* Style for inline code */
+    code {
+      background: #f0f0f0;
+      padding: 0.2em 0.4em;
+      border-radius: 3px;
+      font-family: 'Courier New', monospace;
+      font-size: 0.9em;
+    }
   }
-  
-  @media (min-width: 1440px) {
-    max-width: 1200px;
-    margin: 0 auto;
-  }
-`;
-
-const MessagesContainer = styled.div`
-  flex: 1;
-  padding: 15px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  background-color:;
-  gap: 10px;
-`;
-
-const Message = styled.div`
-  background: ${({ $isUser, $isSystem, $isError }) => 
-    $isSystem ? '#e3f2fd' : 
-    $isError ? '#ffebee' :
-    $isUser ? '#f5f5dc' : '#f1f1f1' 
-  };
-  color: ${({ $isUser, $isSystem, $isError }) => 
-    $isError ? '#d32f2f' :
-    $isSystem ? '#1565c0' :
-    $isUser ? 'Black' : 'Black' 
-  };
-  border: ${({ $isError }) => $isError ? '1px solid #ffcdd2' : 'none'};
-  border-radius: 15px;
-  padding: 10px 15px;
-  margin: 5px 0;
-  max-width: 70%;
-  align-self: ${({ $isUser, $isSystem }) => ($isUser || $isSystem) ? 'flex-end' : 'flex-start'};
-  position: relative;
-  word-break: break-word;
-  opacity: ${({ $isSending }) => $isSending ? 0.7 : 1};
-  transition: opacity 0.3s ease;
-`;
-
-const MessageText = styled.span`
-  display: inline-block;
-  margin-right: 5px;
 `;
 
 const ErrorMessage = styled.div`
@@ -627,6 +775,63 @@ const PersonalInputContainer = styled.div`
   justify-content: center;
   align-items: center;
   width: 100%;
+`;
+
+const ChatContainer = styled.div`
+  display: flex;
+  background-color:#e8e8e8;
+  flex-direction: column;
+  height: 100vh;
+  max-height: 100vh;
+  border: 2px solid;
+  border-color : black;
+  overflow: hidden;
+  padding: 0;
+  margin: 0 auto;
+  max-width: 100%;
+  
+  @media (min-width: 1024px) {
+    max-width: 80%;
+    margin: 0 10%;
+  }
+  
+  @media (min-width: 1440px) {
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+`;
+
+const MessagesContainer = styled.div`
+  flex: 1;
+  padding: 15px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  background-color:;
+  gap: 10px;
+`;
+
+const Message = styled.div`
+  background: ${({ $isUser, $isSystem, $isError }) => 
+    $isSystem ? '#e3f2fd' : 
+    $isError ? '#ffebee' :
+    $isUser ? '#f5f5dc' : '#f1f1f1' 
+  };
+  color: ${({ $isUser, $isSystem, $isError }) => 
+    $isError ? '#d32f2f' :
+    $isSystem ? '#1565c0' :
+    $isUser ? 'Black' : 'Black' 
+  };
+  border: ${({ $isError }) => $isError ? '1px solid #ffcdd2' : 'none'};
+  border-radius: 15px;
+  padding: 10px 15px;
+  margin: 5px 0;
+  max-width: 70%;
+  align-self: ${({ $isUser, $isSystem }) => ($isUser || $isSystem) ? 'flex-end' : 'flex-start'};
+  position: relative;
+  word-break: break-word;
+  opacity: ${({ $isSending }) => $isSending ? 0.7 : 1};
+  transition: opacity 0.3s ease;
 `;
 
 export default ChatInterface;
