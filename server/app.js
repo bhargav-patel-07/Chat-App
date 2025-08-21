@@ -5,7 +5,6 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { generateText } from './ai.js';
 
-
 // Load environment variables from .env.local
 dotenv.config({ path: '.env.local' });
 
@@ -15,14 +14,26 @@ const PORT = process.env.PORT || 5000;
 
 // Middleware - Must come before Socket.IO initialization
 app.use(express.json());
+const allowedOrigins = [
+  'http://localhost:5173',
+  'https://troom.vercel.app',
+  'https://troom.vercel.app/'
+];
+
 app.use(cors({
-  origin: [
-    'http://localhost:5173',
-    'https://troom.vercel.app'
-  ],
-  methods: ['GET', 'POST', 'OPTIONS'],
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) === -1) {
+      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
+  },
+  methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'PATCH', 'DELETE'],
   credentials: true,
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Socket-ID'],
+  exposedHeaders: ['Content-Length', 'X-Socket-ID']
 }));
 
 // Create HTTP server
@@ -31,26 +42,27 @@ const server = createServer(app);
 // Initialize Socket.IO with CORS
 const io = new Server(server, {
   cors: {
-    origin: [
-      "http://localhost:5173",
-      "https://troom.vercel.app"
-    ],
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(new Error('Not allowed by CORS'));
+    },
     methods: ["GET", "POST", "OPTIONS"],
     credentials: true,
-    allowedHeaders: ['Content-Type', 'Authorization']
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Socket-ID']
   },
   path: '/socket.io/',
   serveClient: false,
-  pingTimeout: 60000
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  upgradeTimeout: 10000
 });
 
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
-
-
-
 
 // Track users in each room
 const roomUsers = new Map();

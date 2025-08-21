@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "start": "node app.js",
-    "dev": "nodemon --watch . --ext js --exec node app.js"
+    "dev": "node --watch app.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
     "chat",
@@ -25,10 +26,7 @@
     "socket.io": "^4.7.2",
     "together-ai": "^0.22.0"
   },
-  "devDependencies": {
-    "nodemon": "^3.1.0"
-  },
   "engines": {
-    "node": ">=14.0.0"
+    "node": ">=16.0.0"
   }
 }
