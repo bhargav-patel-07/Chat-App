@@ -2,12 +2,12 @@ const config = {
   // For development
   development: {
     apiUrl: 'http://localhost:5000',
-    wsUrl: 'ws://localhost:5000'
+    wsUrl: 'http://localhost:5000' // Local development
   },
-  // For production (Vercel)
+  // For production (Render)
   production: {
-    apiUrl: 'https://troom.vercel.app',
-    wsUrl: 'wss://troom.vercel.app'
+    apiUrl: 'https://chat-app-1-heca.onrender.com',
+    wsUrl: 'wss://chat-app-1-heca.onrender.com' // WebSocket URL for Render
   }
 };
 

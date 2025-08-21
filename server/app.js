@@ -14,10 +14,11 @@ const PORT = process.env.PORT || 5000;
 
 // Middleware - Must come before Socket.IO initialization
 app.use(express.json());
+
 const allowedOrigins = [
   'http://localhost:5173',
-  'https://troom.vercel.app',
-  'https://troom.vercel.app/'
+  'https://chat-app-1-heca.onrender.com',
+  'https://chat-app-1-heca.onrender.com/'
 ];
 
 app.use(cors({

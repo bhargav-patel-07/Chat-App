@@ -3,14 +3,16 @@ import { BrowserRouter as Router, Routes, Route, useParams } from 'react-router-
 import io from 'socket.io-client';
 import LandingPage from './pages/landingpage';
 import ChatPage from './pages/chatpage';
+import config from './config';
 
 const App = () => {
   const [messages, setMessages] = React.useState([]);
 
   useEffect(() => {
-    const socket = io("https://troom.vercel.app", {
+    const socket = io(config.wsUrl, {
       transports: ['websocket'],
-      secure: true
+      secure: true,
+      path: '/socket.io/'
     });    
     // Client-side connection event
     socket.on("connect", () => {
