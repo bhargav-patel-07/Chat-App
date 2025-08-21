@@ -8,8 +8,10 @@ const App = () => {
   const [messages, setMessages] = React.useState([]);
 
   useEffect(() => {
-    const socket = io("http://localhost:5000");
-    
+    const socket = io("https://troom.vercel.app", {
+      transports: ['websocket'],
+      secure: true
+    });    
     // Client-side connection event
     socket.on("connect", () => {
       console.log("Connected to server with id:", socket.id);
