@@ -1,5 +1,7 @@
 # Troom - Real-time Chat with AI Integration
 
+[![Live Demo](https://img.shields.io/badge/🚀_Live_Demo-000?style=for-the-badge&logo=vercel&labelColor=000000)](https://troom.vercel.app/)
+
 [![React](https://img.shields.io/badge/React-18.2.0-61DAFB?logo=react)](https://reactjs.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-18.x-339933?logo=node.js)](https://nodejs.org/)
 [![Socket.IO](https://img.shields.io/badge/Socket.IO-4.7.2-010101?logo=socket.io)](https://socket.io/)
@@ -112,6 +114,10 @@ VITE_APP_SERVER_URL=http://localhost:5000
 4. Set the start command: `node app.js`
 5. Add environment variables
 6. Deploy!
+
+## 🌐 Live Demo
+
+Experience the live application: [https://troom.vercel.app/](https://troom.vercel.app/)
 
 ## 📸 Screenshots
 
