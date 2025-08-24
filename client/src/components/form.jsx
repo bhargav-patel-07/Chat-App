@@ -83,11 +83,11 @@ const Form = () => {
       <Footer>
       <div className='developer-text'>Developer's Profiles</div>
         <SocialIcons>
-          <a href="https://github.com/yourusername" target="_blank" rel="noopener noreferrer"><FaGithub /></a>
-          <a href="https://linkedin.com/in/yourusername" target="_blank" rel="noopener noreferrer"><FaLinkedin /></a>
-          <a href="https://github.com/yourusername" target="_blank" rel="noopener noreferrer"><FaUser /></a>
+          <a href="https://github.com/bhargav-patel-07" target="_blank" rel="noopener noreferrer"><FaGithub /></a>
+          <a href="https://www.linkedin.com/in/bhargavpatel0710/" target="_blank" rel="noopener noreferrer"><FaLinkedin /></a>
+          <a href="https://bhargavpatel.vercel.app" target="_blank" rel="noopener noreferrer"><FaUser /></a>
           <a href="mailto:bhargavpatel07100@gmail.com" target="_blank" rel="noopener noreferrer"><FaEnvelope/></a>
-          <a href="https://twitter.com/yourusername" target="_blank" rel="noopener noreferrer"><FaTwitter /></a>
+          <a href="https://x.com/Bhargav_0710" target="_blank" rel="noopener noreferrer"><FaTwitter /></a>
         </SocialIcons>
       </Footer>
     </PageContainer>

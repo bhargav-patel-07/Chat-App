@@ -1,94 +1,182 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import styled from 'styled-components';
 import { io } from 'socket.io-client';
-import config from '../config';  
 import ReactMarkdown from 'react-markdown';
-import { Prism as SyntaxHighlighter } from 'prism-react-renderer';
 import Switch from './ui/switch';
 import Input from './ui/input';
 import Button from './ui/button';
 import PersonalInput from './ui/personalinput';
 import Card from './ui/card';
-import Avatar from './ui/Avatar';  
+import Avatar from './ui/Avatar';
 
-const socket = io(config.wsUrl, {
+const SOCKET_URL = import.meta.env.VITE_APP_SERVER_URL || 'https://chat-app-server-1-d8us.onrender.com';
+
+const socketOptions = {
   withCredentials: true,
   transports: ['websocket', 'polling'],
-  autoConnect: false, 
+  autoConnect: false,
   reconnection: true,
   reconnectionAttempts: 5,
   reconnectionDelay: 1000,
   path: '/socket.io/',
-  timeout: 10000
-});
+  timeout: 10000,
+  secure: true,
+  rejectUnauthorized: false,
+  forceNew: true
+};
+
 const ChatInterface = ({ username, chatId }) => {
-  // Socket.IO connection management
+  const socketRef = useRef(null);
+  const [message, setMessage] = useState('');
+  const [messages, setMessages] = useState([]);
+  const [connectionStatus, setConnectionStatus] = useState('connecting');
+  const [joinError, setJoinError] = useState('');
+  const [joined, setJoined] = useState(false);
+  const [aiMode, setAiMode] = useState(false);
+
+  // Validate required props
+  if (!username || !chatId) {
+    return (
+      <div style={{ padding: '20px', color: 'red' }}>
+        Error: Missing required information. Please ensure you have both a username and chat ID.
+      </div>
+    );
+  }
+
+  // Boot socket, attach listeners, join room
   useEffect(() => {
-    // Connect to socket when component mounts
-    socket.connect();
+    // This should never happen because of the early return above, but just in case
+    if (!username || !chatId) {
+      setJoinError('Missing username or chat ID');
+      return;
+    }
+
+    // Initialize socket connection
+    const socket = io(SOCKET_URL, { 
+      ...socketOptions, 
+      auth: { 
+        username: username.trim(), 
+        chatId: chatId.trim() 
+      },
+      path: '/socket.io/',
+      transports: ['websocket'],
+      secure: true,
+      rejectUnauthorized: false
+    });
     
-    // Set up event listeners
+    socketRef.current = socket;
+
     const onConnect = () => {
-      console.log('Connected to server');
       setConnectionStatus('connected');
+      // Server expects { room, username }
+      socket.emit('joinRoom', { room: chatId, username }, (res) => {
+        if (res && res.status === 'ok') {
+          setJoined(true);
+          setJoinError('');
+        } else if (res && res.error) {
+          setJoinError(res.error);
+        }
+      });
     };
-    
-    const onDisconnect = () => {
-      console.log('Disconnected from server');
-      setConnectionStatus('disconnected');
-    };
-    
-    const onError = (error) => {
-      console.error('Socket error:', error);
+
+    const onConnectError = (error) => {
+      console.error('Connection error:', error);
       setConnectionStatus('error');
+      setJoinError('Failed to connect to the chat server');
     };
-    
+
+    const onDisconnect = (reason) => {
+      setConnectionStatus('disconnected');
+      if (reason === 'io server disconnect') {
+        // Server initiated disconnect
+      }
+    };
+
+    const onRoomJoined = (roomId) => {
+      // Server sends just the room ID as a string
+      if (!roomId) {
+        console.error('Room joined event received invalid room ID:', roomId);
+        return;
+      }
+      
+      console.log(`Successfully joined room: ${roomId} as ${username}`);
+      setJoined(true);
+      setConnectionStatus('connected');
+      setJoinError('');
+      
+      // Send a welcome message to the room
+      if (socketRef.current) {
+        socketRef.current.emit('chatMessage', {
+          room: roomId,
+          message: `Hello! I'm ${username} and I've joined the chat.`
+        });
+      }
+    };
+
+    const onMessage = (incoming) => {
+      if (!incoming || (!incoming.text && !incoming.image)) return;
+
+      setMessages((prev) => {
+        const idx = prev.findIndex(
+          (m) =>
+            (m.tempId && incoming.tempId && m.tempId === incoming.tempId) ||
+            (m.user === incoming.user &&
+              m.text === incoming.text &&
+              (!m.timestamp ||
+                !incoming.timestamp ||
+                Math.abs(new Date(m.timestamp).getTime() - new Date(incoming.timestamp).getTime()) < 5000))
+        );
+        if (idx >= 0) {
+          const updated = [...prev];
+          updated[idx] = { ...incoming, isSending: false, isError: false };
+          return updated;
+        }
+        return [...prev, incoming];
+      });
+    };
+
     socket.on('connect', onConnect);
+    socket.on('connect_error', onConnectError);
     socket.on('disconnect', onDisconnect);
-    socket.on('connect_error', onError);
-    
-    // Clean up on unmount
+    socket.on('roomJoined', onRoomJoined);
+    socket.on('message', onMessage);
+
+    // kick off connection (since autoConnect: false)
+    socket.connect();
+
     return () => {
       socket.off('connect', onConnect);
+      socket.off('connect_error', onConnectError);
       socket.off('disconnect', onDisconnect);
-      socket.off('connect_error', onError);
+      socket.off('roomJoined', onRoomJoined);
+      socket.off('message', onMessage);
       socket.disconnect();
     };
-  }, []);
+  }, [chatId, username]);
 
   const renderMessageContent = (text) => {
     if (!text) return [{ type: 'text', content: '' }];
-    
+
     const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
     const parts = [];
     let lastIndex = 0;
     let match;
 
-    // First, handle code blocks
     while ((match = codeBlockRegex.exec(text)) !== null) {
-      // Add markdown text before the code block
       if (match.index > lastIndex) {
-        parts.push({ 
-          type: 'text', 
-          content: text.substring(lastIndex, match.index).trim()
-        });
+        parts.push({ type: 'text', content: text.substring(lastIndex, match.index).trim() });
       }
 
-      // Add the code block
       const language = match[1] || 'text';
       const code = match[2].trim();
-      
-      // Extract the user's query from the beginning of the message
       const messageStart = text.substring(0, match.index).trim();
       const lastNewLine = messageStart.lastIndexOf('\n');
-      const userQuery = lastNewLine >= 0 ? 
-        messageStart.substring(lastNewLine).trim() : 
-        messageStart || 'Code Snippet';
-      
-      parts.push({ 
+      const userQuery = lastNewLine >= 0 ? messageStart.substring(lastNewLine).trim() : messageStart || 'Code Snippet';
+
+      parts.push({
         type: 'component',
         component: (
-          <Card 
+          <Card
             key={`code-${lastIndex}`}
             title={userQuery}
             language={language}
@@ -101,28 +189,20 @@ const ChatInterface = ({ username, chatId }) => {
       lastIndex = match.index + match[0].length;
     }
 
-    // Add any remaining markdown text
     if (lastIndex < text.length) {
       const remainingText = text.substring(lastIndex).trim();
-      if (remainingText) {
-        parts.push({ 
-          type: 'text', 
-          content: remainingText 
-        });
-      }
+      if (remainingText) parts.push({ type: 'text', content: remainingText });
     }
 
     return parts.length > 0 ? parts : [{ type: 'text', content: text }];
   };
-  
-  // State hooks
 
   const handleImageSend = async (file) => {
     if (!file || !username || !chatId) return;
     const tempId = `temp-img-${Date.now()}`;
     const reader = new FileReader();
     reader.onload = async (e) => {
-      const imageData = e.target.result; // base64 string
+      const imageData = e.target.result;
       const messageData = {
         roomId: chatId,
         user: username,
@@ -130,235 +210,91 @@ const ChatInterface = ({ username, chatId }) => {
         tempId,
         timestamp: new Date().toISOString()
       };
-      setMessages(prev => [...prev, { ...messageData, isSending: true }]);
-      socket.emit("sendMessage", messageData, (response) => {
+      setMessages((prev) => [...prev, { ...messageData, isSending: true }]);
+      socketRef.current.emit('sendMessage', messageData, (response) => {
         if (!(response && response.status === 'ok')) {
-          setMessages(prev => prev.map(msg =>
-            msg.tempId === tempId
-              ? { ...msg, isSending: false, isError: true, error: response?.error || 'Failed to send image' }
-              : msg
-          ));
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.tempId === tempId ? { ...m, isSending: false, isError: true, error: response?.error || 'Failed to send image' } : m
+            )
+          );
         }
       });
     };
     reader.readAsDataURL(file);
   };
 
-  const [message, setMessage] = useState("");
-  const [messages, setMessages] = useState([]);
-  const [connectionStatus, setConnectionStatus] = useState('disconnected');
-  const [joinError, setJoinError] = useState('');
-  const [joined, setJoined] = useState(false);
-  const [aiMode, setAiMode] = useState(false); // AI switch state
-
-  useEffect(() => {
-    console.log('Setting up socket listeners...');
-    
-    // Clear messages and state when chatId or username changes
-    setMessages([]);
-    setJoinError('');
-    setJoined(false);
-    
-    if (!username || !chatId) {
-      setJoinError('Missing username or chat ID');
-      return;
-    }
-    
-    console.log(`Joining room: ${chatId} as ${username}`);
-    
-    // Try to join the room
-    console.log('Attempting to join room:', { chatId, username });
-    socket.emit('joinRoom', { 
-      roomId: chatId, 
-      username 
-    }, (response) => {
-      console.log('Join room response:', response);
-      
-      if (response && response.status === 'ok') {
-        console.log('Successfully joined room:', chatId);
-        setJoined(true);
-        setJoinError('');
-      } else {
-        const errorMsg = response?.error || 'Failed to join room. Please try again.';
-        console.error('Failed to join room:', errorMsg, 'Response:', response);
-        setJoinError(errorMsg);
-        setJoined(false);
-        
-      }
-    });
-    
-    // No timeout for join room request. Removed setTimeout logic.
-    // Cleanup function
-    // (No timeout to clear)
-
-    const handleMessage = (msg) => {
-      console.log('Received message from server:', msg);
-      if (!msg || !msg.user || !msg.text) {
-        console.error('Invalid message format:', msg);
-        return;
-      }
-      
-      setMessages(prev => {
-        // Check if this is an update to an existing message (matches by tempId or content)
-        const existingMessageIndex = prev.findIndex(m => {
-          const match = (m.tempId && msg.tempId && m.tempId === msg.tempId) ||
-            (m.user === msg.user && m.text === msg.text &&
-              (!m.timestamp || !msg.timestamp ||
-                Math.abs(new Date(m.timestamp).getTime() - new Date(msg.timestamp).getTime()) < 5000));
-          if (match) {
-            console.log('Matching optimistic message found:', m, 'with server message:', msg);
-          }
-          return match;
-        });
-
-        if (existingMessageIndex >= 0) {
-          // Update existing message (this will clear the sending state)
-          const updated = [...prev];
-          updated[existingMessageIndex] = {
-            ...msg,
-            isSending: false,  // Clear sending state
-            isError: false     // Clear any error state
-          };
-          console.log('Updated existing message:', updated[existingMessageIndex]);
-          return updated;
-        }
-        
-        // For new messages from other users
-        return [...prev, msg];
-      });
-    };
-
-    const handleConnect = () => {
-      console.log('Connected to server with ID:', socket.id);
-      console.log('Socket connected:', socket.connected);
-      console.log('Socket ID:', socket.id);
-      setConnectionStatus('connected');
-      
-      // Rejoin room if we were in one
-      if (username && chatId) {
-        console.log('Rejoining room after reconnect...');
-        socket.emit('joinRoom', { roomId: chatId, username }, (response) => {
-          if (response && response.status === 'ok') {
-            console.log('Successfully rejoined room:', chatId);
-          }
-        });
-      }
-    };
-
-    const handleConnectError = (error) => {
-      console.error('Connection error:', error);
-      console.error('Error details:', {
-        message: error.message,
-        description: error.description,
-        context: error.context
-      });
-    };
-
-    socket.on('connect', handleConnect);
-    socket.on('connect_error', handleConnectError);
-    socket.on('disconnect', (reason) => {
-      console.log('Disconnected:', reason);
-      if (reason === 'io server disconnect') {
-        console.log('Server has disconnected the socket');
-      }
-    });
-    socket.on('error', (error) => {
-      console.error('Socket error:', error);
-    });
-
-    socket.on("message", handleMessage);
-
-    return () => {
-      console.log('Cleaning up socket listeners...');
-      socket.off("message", handleMessage);
-      if (username && chatId) {
-        console.log(`Leaving room: ${chatId}`);
-        socket.emit('leaveRoom', { roomId: chatId, username });
-      }
-    };
-  }, [username, chatId]);
-
   const sendMessage = async () => {
     const trimmedMessage = message.trim();
     if (!trimmedMessage || !username || !chatId) {
-      console.error('Cannot send message: missing required fields', { 
-        hasMessage: !!trimmedMessage, 
-        username, 
-        chatId 
-      });
       return;
     }
 
     const tempId = `temp-${Date.now()}`;
-    const messageData = { 
-      roomId: chatId, 
-      user: username, 
+    const messageData = {
+      roomId: chatId,             // server's sendMessage expects roomId
+      user: username,
       text: trimmedMessage,
-      tempId,  // Include tempId in the message data
-      timestamp: new Date().toISOString()  // Include client timestamp for initial sorting
+      tempId,
+      timestamp: new Date().toISOString()
     };
-    
-    console.log('Sending message:', messageData);
-    
-    // Add message optimistically to UI immediately
-    const optimisticMessage = {
-      ...messageData,
-      isSending: true
-    };
-    
-    setMessages(prev => [...prev, optimisticMessage]);
-    setMessage("");
-    
-    // Scroll to bottom when new message is added
-    setTimeout(() => {
-      const container = document.getElementById('messages-container');
-      if (container) {
-        container.scrollTop = container.scrollHeight;
-      }
-    }, 0);
-    
-    // Emit with acknowledgment
-    socket.emit("sendMessage", messageData, (response) => {
-      console.log('Server response:', response);
-      
-      if (response && response.status === 'ok') {
-        // The message will be updated via the 'message' event from the server
-        console.log('Message sent successfully');
-      } else {
-        // Mark the message as failed
-        setMessages(prev => prev.map(msg => 
-          msg.tempId === tempId 
-            ? { ...msg, isSending: false, isError: true, error: response?.error || 'Failed to send' }
-            : msg
-        ));
-      }
+
+    setMessages((prev) => [...prev, { ...messageData, isSending: true }]);
+    setMessage('');
+
+    // emit with ack
+    socketRef.current.emit('sendMessage', messageData, (response) => {
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.tempId === tempId) {
+            if (response && response.status === 'ok') {
+              // Message sent successfully, remove sending state
+              const { isSending, ...rest } = m;
+              return rest;
+            } else {
+              // Error sending message
+              return { 
+                ...m, 
+                isSending: false, 
+                isError: true, 
+                error: response?.error || 'Failed to send' 
+              };
+            }
+          }
+          return m;
+        })
+      );
     });
 
-    // If AI mode is enabled, send message to AI API and broadcast response
+    // Optional AI reply
     if (aiMode) {
       try {
-        const aiRes = await fetch('http://localhost:5000/api/ai/text', {
+        const aiRes = await fetch(`${SOCKET_URL}/api/ai/text`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ prompt: trimmedMessage })
         });
         const aiData = await aiRes.json();
-        if (aiData && aiData.text) {
-          // Broadcast AI response to group as 'AI'
+        if (aiData && aiData.response) {
           const aiMessage = {
             roomId: chatId,
             user: 'AI',
-            text: aiData.text,
+            text: aiData.response,
             timestamp: new Date().toISOString()
           };
-          socket.emit("sendMessage", aiMessage);
-        }
+          socketRef.current.emit('sendMessage', aiMessage);
+        }        
       } catch (err) {
         console.error('AI API error:', err);
       }
     }
-  };
 
+    // scroll down
+    setTimeout(() => {
+      const container = document.getElementById('messages-container');
+      if (container) container.scrollTop = container.scrollHeight;
+    }, 0);
+  };
 
   const handleKeyPress = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -367,20 +303,18 @@ const ChatInterface = ({ username, chatId }) => {
     }
   };
 
-  // Show error message if failed to join
   if (joinError) {
     return (
       <ErrorContainer>
         <ErrorMessageBox>
           <h3>Could Not Join Chat</h3>
           <p>{joinError}</p>
-          <BackButton onClick={() => window.location.href = '/'}>Go Back</BackButton>
+          <BackButton onClick={() => (window.location.href = '/')}>Go Back</BackButton>
         </ErrorMessageBox>
       </ErrorContainer>
     );
   }
 
-  // Show loading state while connecting
   if (!joined) {
     return (
       <LoadingContainer>
@@ -394,6 +328,7 @@ const ChatInterface = ({ username, chatId }) => {
       <ConnectionStatus $status={connectionStatus}>
         {connectionStatus === 'connected' ? 'Connected' : 'Disconnected'}
       </ConnectionStatus>
+
       <MessagesContainer id="messages-container">
         {messages.length === 0 ? (
           <NoMessages>No messages yet. Send a message to start chatting!</NoMessages>
@@ -401,187 +336,169 @@ const ChatInterface = ({ username, chatId }) => {
           messages.map((msg, i) => {
             const isCurrentUser = msg.user === username;
             const isSystem = msg.user === 'system';
-            
+
             return (
-              <Message 
+              <Message
                 key={msg.tempId || `${msg.timestamp || Date.now()}-${i}`}
                 $isUser={isCurrentUser}
                 $isSystem={isSystem}
                 $isSending={msg.isSending}
                 $isError={msg.isError}
-                data-testid={
-                  isSystem ? 'system-message' : 
-                  isCurrentUser ? 'user-message' : 'other-message'
-                }
+                data-testid={isSystem ? 'system-message' : isCurrentUser ? 'user-message' : 'other-message'}
               >
                 {!isSystem && (
                   <MessageHeader $isCurrentUser={isCurrentUser}>
                     {!isCurrentUser && (
-                      <Avatar 
-                        name={msg.user} 
+                      <Avatar
+                        name={msg.user}
                         color={isCurrentUser ? '#4a90e2' : '#6c757d'}
-                        isAI={msg.user.toLowerCase() === 'ai'}
+                        isAI={String(msg.user).toLowerCase() === 'ai'}
                       />
                     )}
-                    <UserName $isCurrentUser={isCurrentUser}>
-                      {isCurrentUser ? 'You' : msg.user}
-                    </UserName>
+                    <UserName $isCurrentUser={isCurrentUser}>{isCurrentUser ? 'You' : msg.user}</UserName>
                   </MessageHeader>
                 )}
+
                 <MessageContent $isCurrentUser={isCurrentUser} $isSystem={isSystem}>
                   <MessageText>
-                    {renderMessageContent(msg.text).map((part, i) => 
-                      part.type === 'component' ? (
-                        <div key={`part-${i}`} style={{ margin: '10px 0', width: '100%' }}>
-                          {part.component}
-                        </div>
-                      ) : (
-                        <div key={`part-${i}`} className="markdown-content">
-                          <ReactMarkdown
-                            components={{
-                              code({node, inline, className, children, ...props}) {
-                                const match = /language-(\w+)/.exec(className || '');
-                                return !inline ? (
-                                  <Card 
-                                    title="Code Snippet"
-                                    language={match ? match[1] : 'text'}
-                                    code={String(children).replace(/\n$/, '')}
+                    {msg.text &&
+                      renderMessageContent(msg.text).map((part, idx) =>
+                        part.type === 'component' ? (
+                          <div key={`part-${idx}`} style={{ margin: '10px 0', width: '100%' }}>
+                            {part.component}
+                          </div>
+                        ) : (
+                          <div key={`part-${idx}`} className="markdown-content">
+                            <ReactMarkdown
+                              components={{
+                                code({ node, inline, className, children, ...props }) {
+                                  const match = /language-(\w+)/.exec(className || '');
+                                  return !inline ? (
+                                    <Card
+                                      title="Code Snippet"
+                                      language={match ? match[1] : 'text'}
+                                      code={String(children).replace(/\n$/, '')}
+                                    />
+                                  ) : (
+                                    <code className={className} {...props}>
+                                      {children}
+                                    </code>
+                                  );
+                                },
+                                p: ({ node, ...props }) => (
+                                  <p style={{ margin: '0.5em 0', lineHeight: '1.6', textAlign: 'left' }} {...props} />
+                                ),
+                                ul: ({ node, ...props }) => (
+                                  <ul style={{ margin: '0.5em 0', paddingLeft: '1.5em', textAlign: 'left' }} {...props} />
+                                ),
+                                ol: ({ node, ...props }) => (
+                                  <ol style={{ margin: '0.5em 0', paddingLeft: '1.5em', textAlign: 'left' }} {...props} />
+                                ),
+                                h1: ({ node, ...props }) => <h3 style={{ margin: '1em 0 0.5em 0' }} {...props} />,
+                                h2: ({ node, ...props }) => <h4 style={{ margin: '0.9em 0 0.5em 0' }} {...props} />,
+                                h3: ({ node, ...props }) => <h5 style={{ margin: '0.8em 0 0.5em 0' }} {...props} />,
+                                blockquote: ({ node, ...props }) => (
+                                  <blockquote
+                                    style={{
+                                      borderLeft: '3px solid #ddd',
+                                      margin: '0.5em 0',
+                                      padding: '0.1em 1em',
+                                      color: '#666',
+                                      fontStyle: 'italic'
+                                    }}
+                                    {...props}
                                   />
-                                ) : (
-                                  <code className={className} {...props}>
-                                    {children}
-                                  </code>
-                                );
-                              },
-                              p: ({node, ...props}) => (
-                                <p style={{ 
-                                  margin: '0.5em 0',
-                                  lineHeight: '1.6',
-                                  textAlign: 'left'
-                                }} {...props} />
-                              ),
-                              ul: ({node, ...props}) => (
-                                <ul style={{ 
-                                  margin: '0.5em 0', 
-                                  paddingLeft: '1.5em',
-                                  textAlign: 'left'
-                                }} {...props} />
-                              ),
-                              ol: ({node, ...props}) => (
-                                <ol style={{ 
-                                  margin: '0.5em 0', 
-                                  paddingLeft: '1.5em',
-                                  textAlign: 'left'
-                                }} {...props} />
-                              ),
-                              h1: ({node, ...props}) => <h3 style={{ margin: '1em 0 0.5em 0' }} {...props} />,
-                              h2: ({node, ...props}) => <h4 style={{ margin: '0.9em 0 0.5em 0' }} {...props} />,
-                              h3: ({node, ...props}) => <h5 style={{ margin: '0.8em 0 0.5em 0' }} {...props} />,
-                              blockquote: ({node, ...props}) => (
-                                <blockquote 
-                                  style={{
-                                    borderLeft: '3px solid #ddd',
-                                    margin: '0.5em 0',
-                                    padding: '0.1em 1em',
-                                    color: '#666',
-                                    fontStyle: 'italic'
-                                  }}
-                                  {...props} 
-                                />
-                              ),
-                              a: ({node, ...props}) => (
-                                <a 
-                                  style={{ color: '#0066cc', textDecoration: 'none' }}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  {...props}
-                                />
-                              ),
-                            }}
-                          >
-                            {part.content}
-                          </ReactMarkdown>
-                        </div>
-                      )
-                    )}
-                  </MessageText>                {msg.image && (
-                  <div style={{ marginTop: 8 }}>
-                    <img src={msg.image} alt="sent" style={{ maxWidth: '220px', maxHeight: '180px', borderRadius: '8px', border: '1px solid #ccc' }} />
-                  </div>
-                )}
-                
-                {msg.isError && (
-                  <ErrorMessage>Failed to send. {msg.error || 'Please try again.'}</ErrorMessage>
-                )}
-                
-                {msg.timestamp && !msg.isSending && (
-                  <MessageTime>
-                    {new Date(msg.timestamp).toLocaleTimeString([], { 
-                      hour: '2-digit', 
-                      minute: '2-digit' 
-                    })}
-                    {msg.isSending && ' (sending...)'}
-                  </MessageTime>
-                )}
-                
-                {msg.isSending && (
-                  <SendingIndicator>Sending...</SendingIndicator>
-                )}
-              </MessageContent>
-            </Message>
-          );
-        })
-      )}
-    </MessagesContainer>
-      
-    <InputContainer>
-      <TopRow>
-        <SwitchContainer>
-          <Switch checked={aiMode} onChange={setAiMode} />
-        </SwitchContainer>
-        <PersonalInputContainer>
-          <PersonalInput />
-        </PersonalInputContainer>
-      </TopRow>
-      <BottomRow>
-        <InputWrapper>
-          <Input 
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            onKeyPress={handleKeyPress}
-            placeholder="Type a message..."
-            onImageChange={handleImageSend}
-          />
-        </InputWrapper>
-        <ButtonContainer onClick={sendMessage}>
-          <Button>Send</Button>
-        </ButtonContainer>
-      </BottomRow>
-    </InputContainer>
-  </ChatContainer>
+                                ),
+                                a: ({ node, ...props }) => (
+                                  <a style={{ color: '#0066cc', textDecoration: 'none' }} target="_blank" rel="noopener noreferrer" {...props} />
+                                )
+                              }}
+                            >
+                              {part.content}
+                            </ReactMarkdown>
+                          </div>
+                        )
+                      )}
+                  </MessageText>
+
+                  {msg.image && (
+                    <div style={{ marginTop: 8 }}>
+                      <img
+                        src={msg.image}
+                        alt="sent"
+                        style={{ maxWidth: '220px', maxHeight: '180px', borderRadius: '8px', border: '1px solid #ccc' }}
+                      />
+                    </div>
+                  )}
+
+                  {msg.isError && <ErrorMessage>Failed to send. {msg.error || 'Please try again.'}</ErrorMessage>}
+
+                  {msg.timestamp && (
+                    <MessageTime>
+                      {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      {msg.isSending && ' (sending...)'}
+                    </MessageTime>
+                  )}
+
+                  {msg.isSending && <SendingIndicator>Sending...</SendingIndicator>}
+                </MessageContent>
+              </Message>
+            );
+          })
+        )}
+      </MessagesContainer>
+
+      <InputContainer>
+        <TopRow>
+          <SwitchContainer>
+            <Switch checked={aiMode} onChange={setAiMode} />
+          </SwitchContainer>
+          <PersonalInputContainer>
+            <PersonalInput />
+          </PersonalInputContainer>
+        </TopRow>
+
+        <BottomRow>
+          <InputWrapper>
+            <Input
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              onKeyPress={handleKeyPress}
+              placeholder="Type a message..."
+              onImageChange={handleImageSend}
+            />
+          </InputWrapper>
+          <ButtonContainer onClick={sendMessage}>
+            <Button>Send</Button>
+          </ButtonContainer>
+        </BottomRow>
+      </InputContainer>
+    </ChatContainer>
   );
 };
+
+/* ===== Styles ===== */
 
 const MessageHeader = styled.div`
   display: flex;
   align-items: center;
   margin-bottom: 2px;
-  flex-direction: ${props => props.$isCurrentUser ? 'row-reverse' : 'row'};
+  flex-direction: ${(props) => (props.$isCurrentUser ? 'row-reverse' : 'row')};
 `;
 
 const UserName = styled.span`
   margin: 0 6px;
   font-weight: 600;
   font-size: 0.9em;
-  color: ${props => props.$isCurrentUser ? '#4a90e2' : '#333'};
+  color: ${(props) => (props.$isCurrentUser ? '#4a90e2' : '#333')};
 `;
 
 const MessageContent = styled.div`
   display: flex;
   flex-direction: column;
-  align-items: ${props => props.$isCurrentUser ? 'flex-end' : 'flex-start'};
+  align-items: ${(props) => (props.$isCurrentUser ? 'flex-end' : 'flex-start')};
   width: 100%;
-  margin-top: ${props => props.$isSystem ? '4px' : '0'};
+  margin-top: ${(props) => (props.$isSystem ? '4px' : '0')};
 `;
 
 const MessageText = styled.div`
@@ -593,13 +510,11 @@ const MessageText = styled.div`
   margin: 0.25em 0;
   padding: 0;
   width: 100%;
-  
-  /* Ensure markdown content takes full width and wraps properly */
+
   .markdown-content {
     width: 100%;
     text-align: left;
-    
-    /* Add some spacing between markdown elements */
+
     > * {
       margin: 0.3em 0;
       &:first-child {
@@ -609,8 +524,7 @@ const MessageText = styled.div`
         margin-bottom: 0;
       }
     }
-    
-    /* Style for inline code */
+
     code {
       background: #f0f0f0;
       padding: 0.2em 0.4em;
@@ -641,7 +555,6 @@ const MessageTime = styled.span`
   opacity: 0.8;
   text-align: right;
   margin-top: 4px;
-  color: ${props => props.theme.messageTimeColor || 'inherit'};
 `;
 
 const NoMessages = styled.div`
@@ -712,7 +625,7 @@ const ConnectionStatus = styled.div`
   right: 10px;
   padding: 5px 10px;
   border-radius: 15px;
-  background-color: ${props => props.$status === 'connected' ? '#4caf50' : '#f44336'};
+  background-color: ${(props) => (props.$status === 'connected' ? '#4caf50' : '#f44336')};
   color: white;
   font-size: 0.8rem;
   z-index: 1000;
@@ -724,7 +637,7 @@ const InputContainer = styled.div`
   padding: 12px 10px;
   gap: 10px;
   border-top: 1px solid #eee;
-  
+
   @media (max-width: 480px) {
     padding: 8px 5px;
     gap: 8px;
@@ -754,14 +667,14 @@ const SwitchContainer = styled.div`
 
 const InputWrapper = styled.div`
   flex: 1;
-  min-width: 0; /* Prevents flex item from overflowing */
+  min-width: 0;
 `;
 
 const ButtonContainer = styled.div`
   flex: 0 0 80px;
   display: flex;
   margin-left: 1px;
-  
+
   @media (max-width: 480px) {
     flex: 0 0 70px;
     margin-left: 0;
@@ -779,22 +692,22 @@ const PersonalInputContainer = styled.div`
 
 const ChatContainer = styled.div`
   display: flex;
-  background-color:#e8e8e8;
+  background-color: #e8e8e8;
   flex-direction: column;
   height: 100vh;
   max-height: 100vh;
   border: 2px solid;
-  border-color : black;
+  border-color: black;
   overflow: hidden;
   padding: 0;
   margin: 0 auto;
   max-width: 100%;
-  
+
   @media (min-width: 1024px) {
     max-width: 80%;
     margin: 0 10%;
   }
-  
+
   @media (min-width: 1440px) {
     max-width: 1200px;
     margin: 0 auto;
@@ -807,22 +720,15 @@ const MessagesContainer = styled.div`
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  background-color:;
+  background-color: #ffffff;
   gap: 10px;
 `;
 
 const Message = styled.div`
-  background: ${({ $isUser, $isSystem, $isError }) => 
-    $isSystem ? '#e3f2fd' : 
-    $isError ? '#ffebee' :
-    $isUser ? '#f5f5dc' : '#f1f1f1' 
-  };
-  color: ${({ $isUser, $isSystem, $isError }) => 
-    $isError ? '#d32f2f' :
-    $isSystem ? '#1565c0' :
-    $isUser ? 'Black' : 'Black' 
-  };
-  border: ${({ $isError }) => $isError ? '1px solid #ffcdd2' : 'none'};
+  background: ${({ $isUser, $isSystem, $isError }) =>
+    $isSystem ? '#e3f2fd' : $isError ? '#ffebee' : $isUser ? '#f5f5dc' : '#f1f1f1'};
+  color: ${({ $isUser, $isSystem, $isError }) => ($isError ? '#d32f2f' : $isSystem ? '#1565c0' : 'Black')};
+  border: ${({ $isError }) => ($isError ? '1px solid #ffcdd2' : 'none')};
   border-radius: 15px;
   padding: 10px 15px;
   margin: 5px 0;
@@ -830,7 +736,7 @@ const Message = styled.div`
   align-self: ${({ $isUser, $isSystem }) => ($isUser || $isSystem) ? 'flex-end' : 'flex-start'};
   position: relative;
   word-break: break-word;
-  opacity: ${({ $isSending }) => $isSending ? 0.7 : 1};
+  opacity: ${({ $isSending }) => ($isSending ? 0.7 : 1)};
   transition: opacity 0.3s ease;
 `;
 
