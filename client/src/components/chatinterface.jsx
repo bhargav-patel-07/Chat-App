@@ -8,6 +8,7 @@ import Button from './ui/button';
 import PersonalInput from './ui/personalinput';
 import Card from './ui/card';
 import Avatar from './ui/Avatar';
+import UserList from './UserList';
 
 const SOCKET_URL = import.meta.env.VITE_APP_SERVER_URL || 'https://chat-app-server-1-d8us.onrender.com';
 
@@ -28,11 +29,15 @@ const socketOptions = {
 const ChatInterface = ({ username, chatId }) => {
   const socketRef = useRef(null);
   const [message, setMessage] = useState('');
+  const [personalMessage, setPersonalMessage] = useState('');
   const [messages, setMessages] = useState([]);
   const [connectionStatus, setConnectionStatus] = useState('connecting');
   const [joinError, setJoinError] = useState('');
   const [joined, setJoined] = useState(false);
   const [aiMode, setAiMode] = useState(false);
+  const [usersInRoom, setUsersInRoom] = useState([]);
+  const [selectedUserId, setSelectedUserId] = useState(null);
+  const [isPersonalMode, setIsPersonalMode] = useState(false);
 
   // Validate required props
   if (!username || !chatId) {
@@ -52,18 +57,7 @@ const ChatInterface = ({ username, chatId }) => {
     }
 
     // Initialize socket connection
-    const socket = io(SOCKET_URL, { 
-      ...socketOptions, 
-      auth: { 
-        username: username.trim(), 
-        chatId: chatId.trim() 
-      },
-      path: '/socket.io/',
-      transports: ['websocket'],
-      secure: true,
-      rejectUnauthorized: false
-    });
-    
+    const socket = io(SOCKET_URL, socketOptions);
     socketRef.current = socket;
 
     const onConnect = () => {
@@ -135,11 +129,21 @@ const ChatInterface = ({ username, chatId }) => {
       });
     };
 
+    const onUsersInRoom = (users) => {
+      setUsersInRoom(users);
+    };
+
+    const onPrivateMessage = (message) => {
+      setMessages((prev) => [...prev, { ...message, isPrivate: true, isFromMe: message.isFromMe }]);
+    };
+
     socket.on('connect', onConnect);
     socket.on('connect_error', onConnectError);
     socket.on('disconnect', onDisconnect);
     socket.on('roomJoined', onRoomJoined);
     socket.on('message', onMessage);
+    socket.on('usersInRoom', onUsersInRoom);
+    socket.on('privateMessage', onPrivateMessage);
 
     // kick off connection (since autoConnect: false)
     socket.connect();
@@ -150,6 +154,8 @@ const ChatInterface = ({ username, chatId }) => {
       socket.off('disconnect', onDisconnect);
       socket.off('roomJoined', onRoomJoined);
       socket.off('message', onMessage);
+      socket.off('usersInRoom', onUsersInRoom);
+      socket.off('privateMessage', onPrivateMessage);
       socket.disconnect();
     };
   }, [chatId, username]);
@@ -224,19 +230,64 @@ const ChatInterface = ({ username, chatId }) => {
     reader.readAsDataURL(file);
   };
 
-  const sendMessage = async () => {
-    const trimmedMessage = message.trim();
+  const sendPersonalMessage = async () => {
+    const trimmedMessage = personalMessage.trim();
     if (!trimmedMessage || !username || !chatId) {
       return;
     }
 
     const tempId = `temp-${Date.now()}`;
     const messageData = {
-      roomId: chatId,             // server's sendMessage expects roomId
+      roomId: chatId,
       user: username,
       text: trimmedMessage,
       tempId,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      targetUserId: selectedUserId
+    };
+
+    setMessages((prev) => [...prev, { ...messageData, isSending: true }]);
+    setPersonalMessage('');
+
+    // emit with ack
+    socketRef.current.emit('sendMessage', messageData, (response) => {
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.tempId === tempId) {
+            if (response && response.status === 'ok') {
+              // Message sent successfully, remove sending state
+              const { isSending, ...rest } = m;
+              return rest;
+            } else {
+              // Error sending message
+              return { 
+                ...m, 
+                isSending: false, 
+                isError: true, 
+                error: response?.error || 'Failed to send' 
+              };
+            }
+          }
+          return m;
+        })
+      );
+    });
+  };
+
+  const sendMessage = async (personalMessage = false, targetUserId = null) => {
+    const messageToSend = personalMessage ? personalMessage : message.trim();
+    if (!messageToSend || !username || !chatId) {
+      return;
+    }
+
+    const tempId = `temp-${Date.now()}`;
+    const messageData = {
+      roomId: chatId,
+      user: username,
+      text: messageToSend,
+      tempId,
+      timestamp: new Date().toISOString(),
+      targetUserId: isPersonalMode ? selectedUserId : null
     };
 
     setMessages((prev) => [...prev, { ...messageData, isSending: true }]);
@@ -272,7 +323,7 @@ const ChatInterface = ({ username, chatId }) => {
         const aiRes = await fetch(`${SOCKET_URL}/api/ai/text`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt: trimmedMessage })
+          body: JSON.stringify({ prompt: messageToSend })
         });
         const aiData = await aiRes.json();
         if (aiData && aiData.response) {
@@ -299,8 +350,23 @@ const ChatInterface = ({ username, chatId }) => {
   const handleKeyPress = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      sendMessage();
+      if (isPersonalMode && personalMessage.trim()) {
+        sendPersonalMessage();
+      } else {
+        sendMessage();
+      }
     }
+  };
+  
+  const handleUserSelect = (userId) => {
+    setSelectedUserId(userId);
+    setIsPersonalMode(true);
+  };
+  
+  const exitPersonalMode = () => {
+    setIsPersonalMode(false);
+    setSelectedUserId(null);
+    setPersonalMessage('');
   };
 
   if (joinError) {
@@ -323,157 +389,177 @@ const ChatInterface = ({ username, chatId }) => {
     );
   }
 
+  const selectedUser = usersInRoom.find(u => u.socketId === selectedUserId);
+
   return (
-    <ChatContainer>
-      <ConnectionStatus $status={connectionStatus}>
-        {connectionStatus === 'connected' ? 'Connected' : 'Disconnected'}
-      </ConnectionStatus>
+    <Container>
+      <UserList 
+        users={usersInRoom} 
+        currentUser={{ socketId: socketRef.current?.id, username }} 
+        onUserSelect={handleUserSelect}
+      />
+      <ChatContainer>
+        <ConnectionStatus $status={connectionStatus}>
+          {connectionStatus === 'connected' ? 'Connected' : 'Disconnected'}
+        </ConnectionStatus>
 
-      <MessagesContainer id="messages-container">
-        {messages.length === 0 ? (
-          <NoMessages>No messages yet. Send a message to start chatting!</NoMessages>
-        ) : (
-          messages.map((msg, i) => {
-            const isCurrentUser = msg.user === username;
-            const isSystem = msg.user === 'system';
+        <MessagesContainer id="messages-container">
+          {messages.length === 0 ? (
+            <NoMessages>No messages yet. Send a message to start chatting!</NoMessages>
+          ) : (
+            messages.map((msg, i) => {
+              const isCurrentUser = msg.user === username;
+              const isSystem = msg.user === 'system';
 
-            return (
-              <Message
-                key={msg.tempId || `${msg.timestamp || Date.now()}-${i}`}
-                $isUser={isCurrentUser}
-                $isSystem={isSystem}
-                $isSending={msg.isSending}
-                $isError={msg.isError}
-                data-testid={isSystem ? 'system-message' : isCurrentUser ? 'user-message' : 'other-message'}
-              >
-                {!isSystem && (
-                  <MessageHeader $isCurrentUser={isCurrentUser}>
-                    {!isCurrentUser && (
-                      <Avatar
-                        name={msg.user}
-                        color={isCurrentUser ? '#4a90e2' : '#6c757d'}
-                        isAI={String(msg.user).toLowerCase() === 'ai'}
-                      />
-                    )}
-                    <UserName $isCurrentUser={isCurrentUser}>{isCurrentUser ? 'You' : msg.user}</UserName>
-                  </MessageHeader>
-                )}
-
-                <MessageContent $isCurrentUser={isCurrentUser} $isSystem={isSystem}>
-                  <MessageText>
-                    {msg.text &&
-                      renderMessageContent(msg.text).map((part, idx) =>
-                        part.type === 'component' ? (
-                          <div key={`part-${idx}`} style={{ margin: '10px 0', width: '100%' }}>
-                            {part.component}
-                          </div>
-                        ) : (
-                          <div key={`part-${idx}`} className="markdown-content">
-                            <ReactMarkdown
-                              components={{
-                                code({ node, inline, className, children, ...props }) {
-                                  const match = /language-(\w+)/.exec(className || '');
-                                  return !inline ? (
-                                    <Card
-                                      title="Code Snippet"
-                                      language={match ? match[1] : 'text'}
-                                      code={String(children).replace(/\n$/, '')}
-                                    />
-                                  ) : (
-                                    <code className={className} {...props}>
-                                      {children}
-                                    </code>
-                                  );
-                                },
-                                p: ({ node, ...props }) => (
-                                  <p style={{ margin: '0.5em 0', lineHeight: '1.6', textAlign: 'left' }} {...props} />
-                                ),
-                                ul: ({ node, ...props }) => (
-                                  <ul style={{ margin: '0.5em 0', paddingLeft: '1.5em', textAlign: 'left' }} {...props} />
-                                ),
-                                ol: ({ node, ...props }) => (
-                                  <ol style={{ margin: '0.5em 0', paddingLeft: '1.5em', textAlign: 'left' }} {...props} />
-                                ),
-                                h1: ({ node, ...props }) => <h3 style={{ margin: '1em 0 0.5em 0' }} {...props} />,
-                                h2: ({ node, ...props }) => <h4 style={{ margin: '0.9em 0 0.5em 0' }} {...props} />,
-                                h3: ({ node, ...props }) => <h5 style={{ margin: '0.8em 0 0.5em 0' }} {...props} />,
-                                blockquote: ({ node, ...props }) => (
-                                  <blockquote
-                                    style={{
-                                      borderLeft: '3px solid #ddd',
-                                      margin: '0.5em 0',
-                                      padding: '0.1em 1em',
-                                      color: '#666',
-                                      fontStyle: 'italic'
-                                    }}
-                                    {...props}
-                                  />
-                                ),
-                                a: ({ node, ...props }) => (
-                                  <a style={{ color: '#0066cc', textDecoration: 'none' }} target="_blank" rel="noopener noreferrer" {...props} />
-                                )
-                              }}
-                            >
-                              {part.content}
-                            </ReactMarkdown>
-                          </div>
-                        )
+              return (
+                <Message
+                  key={msg.tempId || `${msg.timestamp || Date.now()}-${i}`}
+                  $isUser={isCurrentUser}
+                  $isSystem={isSystem}
+                  $isSending={msg.isSending}
+                  $isError={msg.isError}
+                  data-testid={isSystem ? 'system-message' : isCurrentUser ? 'user-message' : 'other-message'}
+                >
+                  {!isSystem && (
+                    <MessageHeader $isCurrentUser={isCurrentUser}>
+                      {!isCurrentUser && (
+                        <Avatar
+                          name={msg.user}
+                          color={isCurrentUser ? '#4a90e2' : '#6c757d'}
+                          isAI={String(msg.user).toLowerCase() === 'ai'}
+                        />
                       )}
-                  </MessageText>
-
-                  {msg.image && (
-                    <div style={{ marginTop: 8 }}>
-                      <img
-                        src={msg.image}
-                        alt="sent"
-                        style={{ maxWidth: '220px', maxHeight: '180px', borderRadius: '8px', border: '1px solid #ccc' }}
-                      />
-                    </div>
+                      <UserName $isCurrentUser={isCurrentUser}>{isCurrentUser ? 'You' : msg.user}</UserName>
+                    </MessageHeader>
                   )}
 
-                  {msg.isError && <ErrorMessage>Failed to send. {msg.error || 'Please try again.'}</ErrorMessage>}
+                  <MessageContent $isCurrentUser={isCurrentUser} $isSystem={isSystem}>
+                    <MessageText>
+                      {msg.text &&
+                        renderMessageContent(msg.text).map((part, idx) =>
+                          part.type === 'component' ? (
+                            <div key={`part-${idx}`} style={{ margin: '10px 0', width: '100%' }}>
+                              {part.component}
+                            </div>
+                          ) : (
+                            <div key={`part-${idx}`} className="markdown-content">
+                              <ReactMarkdown
+                                components={{
+                                  code({ node, inline, className, children, ...props }) {
+                                    const match = /language-(\w+)/.exec(className || '');
+                                    return !inline ? (
+                                      <Card
+                                        title="Code Snippet"
+                                        language={match ? match[1] : 'text'}
+                                        code={String(children).replace(/\n$/, '')}
+                                      />
+                                    ) : (
+                                      <code className={className} {...props}>
+                                        {children}
+                                      </code>
+                                    );
+                                  },
+                                  p: ({ node, ...props }) => (
+                                    <p style={{ margin: '0.5em 0', lineHeight: '1.6', textAlign: 'left' }} {...props} />
+                                  ),
+                                  ul: ({ node, ...props }) => (
+                                    <ul style={{ margin: '0.5em 0', paddingLeft: '1.5em', textAlign: 'left' }} {...props} />
+                                  ),
+                                  ol: ({ node, ...props }) => (
+                                    <ol style={{ margin: '0.5em 0', paddingLeft: '1.5em', textAlign: 'left' }} {...props} />
+                                  ),
+                                  h1: ({ node, ...props }) => <h3 style={{ margin: '1em 0 0.5em 0' }} {...props} />,
+                                  h2: ({ node, ...props }) => <h4 style={{ margin: '0.9em 0 0.5em 0' }} {...props} />,
+                                  h3: ({ node, ...props }) => <h5 style={{ margin: '0.8em 0 0.5em 0' }} {...props} />,
+                                  blockquote: ({ node, ...props }) => (
+                                    <blockquote
+                                      style={{
+                                        borderLeft: '3px solid #ddd',
+                                        margin: '0.5em 0',
+                                        padding: '0.1em 1em',
+                                        color: '#666',
+                                        fontStyle: 'italic'
+                                      }}
+                                      {...props}
+                                    />
+                                  ),
+                                  a: ({ node, ...props }) => (
+                                    <a style={{ color: '#0066cc', textDecoration: 'none' }} target="_blank" rel="noopener noreferrer" {...props} />
+                                  )
+                                }}
+                              >
+                                {part.content}
+                              </ReactMarkdown>
+                            </div>
+                          )
+                        )}
+                    </MessageText>
 
-                  {msg.timestamp && (
-                    <MessageTime>
-                      {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      {msg.isSending && ' (sending...)'}
-                    </MessageTime>
-                  )}
+                    {msg.image && (
+                      <div style={{ marginTop: 8 }}>
+                        <img
+                          src={msg.image}
+                          alt="sent"
+                          style={{ maxWidth: '220px', maxHeight: '180px', borderRadius: '8px', border: '1px solid #ccc' }}
+                        />
+                      </div>
+                    )}
 
-                  {msg.isSending && <SendingIndicator>Sending...</SendingIndicator>}
-                </MessageContent>
-              </Message>
-            );
-          })
-        )}
-      </MessagesContainer>
+                    {msg.isError && <ErrorMessage>Failed to send. {msg.error || 'Please try again.'}</ErrorMessage>}
 
-      <InputContainer>
-        <TopRow>
-          <SwitchContainer>
-            <Switch checked={aiMode} onChange={setAiMode} />
-          </SwitchContainer>
-          <PersonalInputContainer>
-            <PersonalInput />
-          </PersonalInputContainer>
-        </TopRow>
+                    {msg.timestamp && (
+                      <MessageTime>
+                        {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        {msg.isSending && ' (sending...)'}
+                      </MessageTime>
+                    )}
 
-        <BottomRow>
-          <InputWrapper>
-            <Input
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              onKeyPress={handleKeyPress}
-              placeholder="Type a message..."
-              onImageChange={handleImageSend}
-            />
-          </InputWrapper>
-          <ButtonContainer onClick={sendMessage}>
-            <Button>Send</Button>
-          </ButtonContainer>
-        </BottomRow>
-      </InputContainer>
-    </ChatContainer>
+                    {msg.isSending && <SendingIndicator>Sending...</SendingIndicator>}
+                  </MessageContent>
+                </Message>
+              );
+            })
+          )}
+        </MessagesContainer>
+
+        <InputContainer>
+          {isPersonalMode && selectedUser && (
+            <PersonalChatHeader>
+              <span>Chat with {selectedUser.username}</span>
+              <CloseButton onClick={exitPersonalMode}>×</CloseButton>
+            </PersonalChatHeader>
+          )}
+          <TopRow>
+            <SwitchContainer>
+              <Switch checked={aiMode} onChange={setAiMode} />
+            </SwitchContainer>
+            <PersonalInputContainer>
+              <PersonalInput 
+                value={isPersonalMode ? personalMessage : ''}
+                onInputChange={isPersonalMode ? setPersonalMessage : () => {}}
+                placeholder={isPersonalMode ? `Message ${selectedUser?.username || 'user'}...` : 'Select a user to message privately'}
+                disabled={!isPersonalMode}
+              />
+            </PersonalInputContainer>
+          </TopRow>
+
+          <BottomRow>
+            <InputWrapper>
+              <Input
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                onKeyPress={handleKeyPress}
+                placeholder="Type a message..."
+                onImageChange={handleImageSend}
+              />
+            </InputWrapper>
+            <ButtonContainer onClick={sendMessage}>
+              <Button>Send</Button>
+            </ButtonContainer>
+          </BottomRow>
+        </InputContainer>
+      </ChatContainer>
+    </Container>
   );
 };
 
@@ -690,24 +776,46 @@ const PersonalInputContainer = styled.div`
   width: 100%;
 `;
 
+const Container = styled.div`
+  display: flex;
+  height: 100vh;
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+  background: #fff;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  position: relative;
+`;
+
 const ChatContainer = styled.div`
   display: flex;
-  background-color: #e8e8e8;
   flex-direction: column;
-  height: 100vh;
-  max-height: 100vh;
-  border: 2px solid;
-  border-color: black;
-  overflow: hidden;
-  padding: 0;
-  margin: 0 auto;
-  max-width: 100%;
+  flex: 1;
+  height: 100%;
+`;
 
-  @media (min-width: 1024px) {
-    max-width: 80%;
-    margin: 0 10%;
-  }
+const PersonalChatHeader = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 16px;
+  background: #f5f5f5;
+  border-bottom: 1px solid #e0e0e0;
+  font-weight: 500;
+`;
 
+const CloseButton = styled.button`
+  background: none;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 0 8px;
+  color: #666;
+  
+  &:hover {
+    color: #333;
   @media (min-width: 1440px) {
     max-width: 1200px;
     margin: 0 auto;

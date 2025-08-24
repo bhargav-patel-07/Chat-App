@@ -54,14 +54,36 @@ const io = new Server(httpServer, {
   upgradeTimeout: 10000
 });
 
-// ✅ Track users per room
-const roomUsers = new Map();
+// Track users and their socket connections
+const users = new Map(); // socketId -> { username, room, socket }
+const roomUsers = new Map(); // room -> Set of socketIds
 
 io.on("connection", (socket) => {
   console.log("New client connected:", socket.id);
 
   let currentRoom = null;
   let currentUsername = null;
+  
+  // Add user to tracking
+  socket.on("userConnected", ({ username, room }) => {
+    currentUsername = username;
+    currentRoom = room;
+    
+    users.set(socket.id, { username, room, socket });
+    
+    if (!roomUsers.has(room)) {
+      roomUsers.set(room, new Set());
+    }
+    roomUsers.get(room).add(socket.id);
+    
+    // Broadcast updated user list to all clients in the room
+    const usersInRoom = Array.from(roomUsers.get(room) || []).map(socketId => ({
+      socketId,
+      username: users.get(socketId)?.username || 'Unknown'
+    }));
+    
+    io.to(room).emit('usersInRoom', usersInRoom);
+  });
 // Add inside io.on("connection", (socket) => { ... })
 
 socket.on("sendMessage", (messageData, callback) => {
@@ -82,22 +104,20 @@ socket.on("sendMessage", (messageData, callback) => {
   if (callback) callback({ status: 'ok' });
 });
 
-  // Join room
+    // Join room
   socket.on("joinRoom", ({ username, room }) => {
     currentRoom = room;
     currentUsername = username;
 
     socket.join(room);
-
-    if (!roomUsers.has(room)) {
-      roomUsers.set(room, new Set());
-    }
-    roomUsers.get(room).add(username);
-
-    console.log(`${username} joined room: ${room}`);
-
+    
     // Notify user
     socket.emit("roomJoined", room);
+    
+    // Update user tracking
+    socket.emit('userConnected', { username, room });
+    
+    console.log(`${username} joined room: ${room}`);
 
     // Join room without broadcasting a system message
   });

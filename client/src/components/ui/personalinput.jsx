@@ -1,11 +1,18 @@
-import React from 'react';
+import React, { useState } from 'react';
 import styled from 'styled-components';
 
-const Input = () => {
+const PersonalInput = ({ onInputChange, value = '' }) => {
   return (
     <StyledWrapper>
       <div className="group">
-        <input required type="text" className="input" placeholder=" " />
+        <input 
+          required 
+          type="text" 
+          className="input" 
+          placeholder=" " 
+          value={value}
+          onChange={(e) => onInputChange(e.target.value)}
+        />
         <span className="highlight" />
         <span className="bar" />
         <label>Username [For Personal texting]</label>
@@ -72,4 +79,4 @@ const StyledWrapper = styled.div`
   }
 `;
 
-export default Input;
+export default PersonalInput;
